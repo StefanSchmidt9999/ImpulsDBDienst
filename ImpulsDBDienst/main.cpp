@@ -120,6 +120,7 @@ void WINAPI ServiceMain(DWORD, LPWSTR*)
 
             std::wstring storedProcedureId =
                 ExtractTagValue(xmlText, L"StoredProcedureId");
+            // Test
 
             if (commandId.empty() || storedProcedureId.empty())
             {
