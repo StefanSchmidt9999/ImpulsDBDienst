@@ -2,13 +2,21 @@
 #define WIN32_LEAN_AND_MEAN
 
 #include <windows.h>
-#include <mq.h>
 #include <objbase.h>
 #include <propidl.h>
+#include <mq.h>
+
+#include <oledb.h>
+#include <sqloledb.h>
+#include <comdef.h>
+#include <atlbase.h>
 
 #include <string>
 #include <fstream>
 #include <vector>
+
+#pragma comment(lib, "Ole32.lib")
+#pragma comment(lib, "OleAut32.lib")
 
 #pragma comment(lib, "Advapi32.lib")
 #pragma comment(lib, "Mqrt.lib")
@@ -26,32 +34,22 @@ QUEUEHANDLE gErrorQueue = nullptr;
 void WINAPI ServiceMain(DWORD argc, LPWSTR* argv);
 void WINAPI ServiceCtrlHandler(DWORD ctrlCode);
 
+std::wstring ExecuteStoredProcedureXml(const std::wstring& procedureName);
+
 void WriteLog(const std::wstring& text);
 
-bool OpenPrivateQueue(
-    const std::wstring& queueName,
-    DWORD accessMode,
-    QUEUEHANDLE* queueHandle);
-
+bool OpenPrivateQueue(const std::wstring& queueName, DWORD accessMode, QUEUEHANDLE* queueHandle);
 bool OpenQueues();
 void CloseQueues();
 
 bool ReceiveMessageFromDb(std::wstring& xmlText);
-void SendMessageToQueue(
-    QUEUEHANDLE queueHandle,
-    const std::wstring& xmlText,
-    const std::wstring& label);
+void SendMessageToQueue( QUEUEHANDLE queueHandle,  const std::wstring& xmlText, const std::wstring& label);
 
-std::wstring ExtractTagValue(
-    const std::wstring& xml,
-    const std::wstring& tagName);
-
-std::wstring BuildStoredProcedureName(
-    const std::wstring& commandId,
-    const std::wstring& storedProcedureId);
-
+std::wstring ExtractTagValue(const std::wstring& xml, const std::wstring& tagName);
+std::wstring BuildStoredProcedureName(const std::wstring& commandId, const std::wstring& storedProcedureId);
 std::string WStringToUtf8(const std::wstring& text);
 std::wstring Utf8ToWString(const std::string& text);
+std::wstring ExtractTagValue(const std::wstring& xml, const std::wstring& tagName);
 
 // ------------------------------------------------------------
 
@@ -143,6 +141,8 @@ void WINAPI ServiceMain(DWORD, LPWSTR*)
             WriteLog(L"StoredProcedureId: " + storedProcedureId);
             WriteLog(L"Gebildeter Stored Procedure Name: " + procedureName);
 
+            std::wstring sqlXml = ExecuteStoredProcedureXml(procedureName);
+
             std::wstring responseXml =
                 L"<?xml version=\"1.0\"?>"
                 L"<DBResponse>"
@@ -150,7 +150,9 @@ void WINAPI ServiceMain(DWORD, LPWSTR*)
                 L"<CommandId>" + commandId + L"</CommandId>"
                 L"<StoredProcedureId>" + storedProcedureId + L"</StoredProcedureId>"
                 L"<ProcedureName>" + procedureName + L"</ProcedureName>"
-                L"<Message>Stored Procedure Name wurde gebildet. OLE DB kommt im naechsten Schritt.</Message>"
+                L"<Data>"
+                + sqlXml +
+                L"</Data>"
                 L"</DBResponse>";
 
             SendMessageToQueue(
@@ -438,9 +440,7 @@ void SendMessageToQueue(
 
 // ------------------------------------------------------------
 
-std::wstring ExtractTagValue(
-    const std::wstring& xml,
-    const std::wstring& tagName)
+std::wstring ExtractTagValue(const std::wstring& xml, const std::wstring& tagName)
 {
     std::wstring startTag =
         L"<" + tagName + L">";
@@ -484,23 +484,35 @@ std::wstring ExtractTagValue(
 
 // ------------------------------------------------------------
 
-std::wstring BuildStoredProcedureName(
-    const std::wstring& commandId,
-    const std::wstring& storedProcedureId)
+std::wstring BuildStoredProcedureName(const std::wstring& commandId, const std::wstring& storedProcedureId)
 {
-    std::wstring spId = storedProcedureId;
+    //std::wstring spId = storedProcedureId;
 
-    while (spId.length() > 1 && spId[0] == L'0')
+    //while (spId.length() > 1 && spId[0] == L'0')
+    //{
+    //    spId.erase(spId.begin());
+    //}
+
+    //if (spId.empty())
+    //{
+    //    spId = L"0";
+    //}
+
+    //return L"SP" + commandId + spId;
+
+    // Beispiel:
+    // CommandId = 9
+    // StoredProcedureId = 00001
+    // Ergebnis = SP90001
+
+    if (storedProcedureId.length() == 5)
     {
-        spId.erase(spId.begin());
+       // return L"SP" + commandId + storedProcedureId.substr(1);
     }
 
-    if (spId.empty())
-    {
-        spId = L"0";
-    }
+    return L"[dbo].[SP90001]";
 
-    return L"SP" + commandId + spId;
+    //return L"SP" + commandId + storedProcedureId;
 }
 
 // ------------------------------------------------------------
@@ -565,4 +577,281 @@ std::wstring Utf8ToWString(const std::string& text)
         sizeNeeded);
 
     return result;
+}
+
+std::wstring ExecuteStoredProcedureXml(const std::wstring& procedureName)
+{
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+
+    bool comInitialized = SUCCEEDED(hr);
+
+    IDBInitialize* pIDBInitialize = nullptr;
+
+    hr = CoCreateInstance(
+        CLSID_SQLOLEDB,
+        nullptr,
+        CLSCTX_INPROC_SERVER,
+        IID_IDBInitialize,
+        reinterpret_cast<void**>(&pIDBInitialize));
+
+    if (FAILED(hr))
+    {
+        WriteLog(L"CoCreateInstance SQLOLEDB fehlgeschlagen.");
+        return L"<Error>OLEDB Provider konnte nicht erstellt werden.</Error>";
+    }
+
+    IDBProperties* pIDBProperties = nullptr;
+
+    hr = pIDBInitialize->QueryInterface(
+        IID_IDBProperties,
+        reinterpret_cast<void**>(&pIDBProperties));
+
+    if (FAILED(hr))
+    {
+        pIDBInitialize->Release();
+        return L"<Error>IDBProperties Fehler.</Error>";
+    }
+
+    DBPROP dbProps[4]{};
+
+    dbProps[0].dwPropertyID = DBPROP_INIT_DATASOURCE;
+    dbProps[0].dwOptions = DBPROPOPTIONS_REQUIRED;
+    dbProps[0].colid = DB_NULLID;
+    dbProps[0].vValue.vt = VT_BSTR;
+    dbProps[0].vValue.bstrVal =
+        SysAllocString(L"(localdb)\\MSSQLLocalDB");
+
+    dbProps[1].dwPropertyID = DBPROP_INIT_CATALOG;
+    dbProps[1].dwOptions = DBPROPOPTIONS_REQUIRED;
+    dbProps[1].colid = DB_NULLID;
+    dbProps[1].vValue.vt = VT_BSTR;
+    dbProps[1].vValue.bstrVal =
+        SysAllocString(L"AdventureWorks2019");
+
+    dbProps[2].dwPropertyID = DBPROP_AUTH_INTEGRATED;
+    dbProps[2].dwOptions = DBPROPOPTIONS_REQUIRED;
+    dbProps[2].colid = DB_NULLID;
+    dbProps[2].vValue.vt = VT_BSTR;
+    dbProps[2].vValue.bstrVal =
+        SysAllocString(L"SSPI");
+
+    dbProps[3].dwPropertyID = DBPROP_INIT_TIMEOUT;
+    dbProps[3].dwOptions = DBPROPOPTIONS_REQUIRED;
+    dbProps[3].colid = DB_NULLID;
+    dbProps[3].vValue.vt = VT_I4;
+    dbProps[3].vValue.lVal = 10;
+
+    DBPROPSET propSet{};
+    propSet.guidPropertySet = DBPROPSET_DBINIT;
+    propSet.cProperties = 4;
+    propSet.rgProperties = dbProps;
+
+    hr = pIDBProperties->SetProperties(1, &propSet);
+
+    for (int i = 0; i < 4; i++)
+    {
+        VariantClear(&dbProps[i].vValue);
+    }
+
+    pIDBProperties->Release();
+
+    if (FAILED(hr))
+    {
+        pIDBInitialize->Release();
+        return L"<Error>SetProperties fehlgeschlagen.</Error>";
+    }
+
+    hr = pIDBInitialize->Initialize();
+
+    if (FAILED(hr))
+    {
+        pIDBInitialize->Release();
+        WriteLog(L"SQL Verbindung fehlgeschlagen.");
+        return L"<Error>SQL Verbindung fehlgeschlagen.</Error>";
+    }
+
+    IDBCreateSession* pCreateSession = nullptr;
+
+    hr = pIDBInitialize->QueryInterface(
+        IID_IDBCreateSession,
+        reinterpret_cast<void**>(&pCreateSession));
+
+    if (FAILED(hr))
+    {
+        pIDBInitialize->Uninitialize();
+        pIDBInitialize->Release();
+        return L"<Error>IDBCreateSession Fehler.</Error>";
+    }
+
+    IDBCreateCommand* pCreateCommand = nullptr;
+
+    hr = pCreateSession->CreateSession(
+        nullptr,
+        IID_IDBCreateCommand,
+        reinterpret_cast<IUnknown**>(&pCreateCommand));
+
+    pCreateSession->Release();
+
+    if (FAILED(hr))
+    {
+        pIDBInitialize->Uninitialize();
+        pIDBInitialize->Release();
+        return L"<Error>IDBCreateCommand Fehler.</Error>";
+    }
+
+    ICommandText* pCommandText = nullptr;
+
+    hr = pCreateCommand->CreateCommand(
+        nullptr,
+        IID_ICommandText,
+        reinterpret_cast<IUnknown**>(&pCommandText));
+
+    pCreateCommand->Release();
+
+    if (FAILED(hr))
+    {
+        pIDBInitialize->Uninitialize();
+        pIDBInitialize->Release();
+        return L"<Error>ICommandText Fehler.</Error>";
+    }
+
+    std::wstring sql =
+        L"EXEC [dbo].[SP90001]";//      EXEC //dbo." + procedureName;
+
+    hr = pCommandText->SetCommandText(
+        DBGUID_DBSQL,
+        sql.c_str());
+
+    if (FAILED(hr))
+    {
+        pCommandText->Release();
+        pIDBInitialize->Uninitialize();
+        pIDBInitialize->Release();
+        return L"<Error>SetCommandText Fehler.</Error>";
+    }
+
+    IRowset* pRowset = nullptr;
+
+    hr = pCommandText->Execute(
+        nullptr,
+        IID_IRowset,
+        nullptr,
+        nullptr,
+        reinterpret_cast<IUnknown**>(&pRowset));
+
+    pCommandText->Release();
+
+    if (FAILED(hr))
+    {
+        pIDBInitialize->Uninitialize();
+        pIDBInitialize->Release();
+        WriteLog(L"Execute Stored Procedure fehlgeschlagen: " + sql);
+        return L"<Error>Stored Procedure konnte nicht ausgeführt werden.</Error>";
+    }
+
+    IAccessor* pAccessor = nullptr;
+
+    hr = pRowset->QueryInterface(
+        IID_IAccessor,
+        reinterpret_cast<void**>(&pAccessor));
+
+    if (FAILED(hr))
+    {
+        pRowset->Release();
+        pIDBInitialize->Uninitialize();
+        pIDBInitialize->Release();
+        return L"<Error>IAccessor Fehler.</Error>";
+    }
+
+    struct RowData
+    {
+        DBSTATUS status;
+        DBLENGTH length;
+        wchar_t xml[65536];
+    };
+
+    DBBINDING binding{};
+    binding.iOrdinal = 1;
+    binding.obStatus = offsetof(RowData, status);
+    binding.obLength = offsetof(RowData, length);
+    binding.obValue = offsetof(RowData, xml);
+    binding.dwPart = DBPART_VALUE | DBPART_STATUS | DBPART_LENGTH;
+    binding.dwMemOwner = DBMEMOWNER_CLIENTOWNED;
+    binding.eParamIO = DBPARAMIO_NOTPARAM;
+    binding.cbMaxLen = sizeof(((RowData*)0)->xml);
+    binding.wType = DBTYPE_WSTR;
+
+    HACCESSOR hAccessor = NULL;
+
+    hr = pAccessor->CreateAccessor(
+        DBACCESSOR_ROWDATA,
+        1,
+        &binding,
+        sizeof(RowData),
+        &hAccessor,
+        nullptr);
+
+    if (FAILED(hr))
+    {
+        pAccessor->Release();
+        pRowset->Release();
+        pIDBInitialize->Uninitialize();
+        pIDBInitialize->Release();
+        return L"<Error>CreateAccessor Fehler.</Error>";
+    }
+
+    HROW hRow = NULL;
+    HROW* pRows = &hRow;
+    DBCOUNTITEM rowsObtained = 0;
+
+    hr = pRowset->GetNextRows(
+        DB_NULL_HCHAPTER,
+        0,
+        1,
+        &rowsObtained,
+        &pRows);
+
+    std::wstring resultXml;
+
+    if (SUCCEEDED(hr) && rowsObtained == 1)
+    {
+        RowData data{};
+        hr = pRowset->GetData(hRow, hAccessor, &data);
+
+        if (SUCCEEDED(hr) && data.status == DBSTATUS_S_OK)
+        {
+            resultXml = data.xml;
+        }
+        else
+        {
+            resultXml = L"<Error>Keine XML-Daten gelesen.</Error>";
+        }
+
+        pRowset->ReleaseRows(
+            1,
+            &hRow,
+            nullptr,
+            nullptr,
+            nullptr);
+    }
+    else
+    {
+        resultXml = L"<Error>Keine Zeile von Stored Procedure erhalten.</Error>";
+    }
+
+    pAccessor->ReleaseAccessor(hAccessor, nullptr);
+    pAccessor->Release();
+    pRowset->Release();
+
+    pIDBInitialize->Uninitialize();
+    pIDBInitialize->Release();
+
+    if (comInitialized)
+    {
+        CoUninitialize();
+    }
+
+    WriteLog(L"Stored Procedure ausgeführt: " + procedureName);
+
+    return resultXml;
 }
