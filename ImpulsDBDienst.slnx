@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="ImpulsDBDienst/ImpulsDBDienst.vcxproj" />
+  <Project Path="ImpulsDBDienst/ImpulsDBDienst.vcxproj" Id="221d73ae-3a65-42e5-a3db-c8ef0608f07a" />
 </Solution>
