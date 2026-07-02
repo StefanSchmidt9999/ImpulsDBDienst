@@ -163,13 +163,14 @@ void WINAPI ServiceMain(DWORD, LPWSTR*)
             // std::wstring sqlXml = ExecuteStoredProcedureXml(procedureName);
             
             std::vector<DbParameter> parameters = ExtractParameters(xmlText);
+            std::wstring clientId = ExtractTagValue(xmlText, L"ClientId");
 
             std::wstring sqlXml = ExecuteStoredProcedureXml(procedureName, parameters);
-
-
+            
             std::wstring responseXml =
                 L"<?xml version=\"1.0\"?>"
                 L"<DBResponse>"
+                L"<ClientId>" + clientId + L"</ClientId>"
                 L"<Status>OK</Status>"
                 L"<CommandId>" + commandId + L"</CommandId>"
                 L"<StoredProcedureId>" + storedProcedureId + L"</StoredProcedureId>"
